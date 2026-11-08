@@ -11,7 +11,7 @@
 #>
 param(
     [string]$Source = (Split-Path $PSScriptRoot -Parent),
-    [string]$Destination = "E:\Game stuff\mods\Repos\Repos\FOS Sports Football"
+    [string]$Destination = "E:\Game stuff\mods\Repos\FOS-Sports-Football"
 )
 
 if (-not (Test-Path (Join-Path $Source "project.godot"))) {
