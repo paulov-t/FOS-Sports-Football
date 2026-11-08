@@ -70,6 +70,9 @@ Or open `project.godot` in the Godot editor and press **F5**.
 Default bindings follow the **classic Madden scheme**. See [docs/CONTROLS.md](docs/CONTROLS.md)
 for the full table and the planned passing/defense/pre-snap layouts.
 
+For the current sandbox controls, reset/hold keys, and playtest checklist, see
+[docs/PLAYTEST.md](docs/PLAYTEST.md).
+
 | Action | Keyboard / Mouse | Xbox | PlayStation |
 | --- | --- | --- | --- |
 | Move | WASD | Left stick / D-pad | Left stick / D-pad |

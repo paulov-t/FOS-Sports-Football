@@ -138,7 +138,8 @@ trajectory, lead, and whether the window is actually open come from physics.
 ## Greybox sandbox
 
 `src/core/GreyboxField.tscn` is the movement test bed. Everything below exists so you can
-see what the physics is doing; none of it is a game system:
+see what the physics is doing; none of it is a game system. For the full sandbox checklist,
+see [PLAYTEST.md](PLAYTEST.md).
 
 | Aid | What it is |
 | --- | --- |
