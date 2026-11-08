@@ -148,8 +148,9 @@ see what the physics is doing; none of it is a game system:
 | Spot readout | HUD line showing the nearest painted yard line |
 | F1 | Toggles a 1-yard reference grid over the field |
 | F2 | Cycles the CPU defender through CHASE, BRACE and STRAFE |
-| F3 | Resets both players to their spawn spots and clears the collision counter |
+| F3 | Resets both players, clears the collision counter, and holds the CPU for 3 seconds |
 | F4 | Cycles the surface (natural grass, turf, wet, mud, snow, ice) |
+| F5 | Resets the CPU and toggles an indefinite hold; press again to release it |
 
 The field's long axis runs into the screen, so yard lines recede toward the horizon. That
 is deliberate: it is the strongest cue for judging speed and distance travelled.
@@ -167,6 +168,11 @@ body's facing and the contact normal, current condition, and the surface's tract
 A strong hit briefly locks steering. That stagger is the readable consequence of the
 impulse, not a separate tackle animation. The `F4` surfaces exist so you can see the same
 hit behave differently when the turf cannot supply the same grip.
+
+`F5` is the test control: it puts the CPU back on its spawn and holds it there until you
+press `F5` again. `F3` resets both bodies and gives the CPU a 3-second hold before it
+resumes. If contact turns into a sustained lean, the sandbox also resets the CPU after a
+few seconds of continuous contact; separating first cancels that auto-reset.
 
 ## Keyboard and mouse
 

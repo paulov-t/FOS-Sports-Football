@@ -5,6 +5,8 @@ extends Node3D
 const HINT_CONTROLLER := "No controller detected. Plug one in — Xbox, PlayStation, and generic XInput pads all work."
 const PLAYER_SPAWN := Vector3(0.0, 0.93, 36.576)
 const CPU_SPAWN := Vector3(0.0, 0.93, 28.0)
+const AUTO_RESET_CONTACT_TIME := 3.0
+const CONTACT_RESET_DISTANCE := 1.0
 const HUMAN_BASE := Color(0.85, 0.87, 0.92)
 const CPU_BASE := Color(0.80, 0.25, 0.25)
 const HUMAN_CHEVRON := Color(1.0, 0.62, 0.15)
@@ -33,6 +35,7 @@ var _last_jump_age := 99.0
 var _last_dive_age := 99.0
 var _last_hit_age := 99.0
 var _last_hit: Dictionary = {}
+var _contact_time := 0.0
 
 func _ready() -> void:
 	player.is_user_controlled = true
@@ -222,6 +225,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_F4:
 			EnvironmentManager.cycle_surface()
 			get_viewport().set_input_as_handled()
+		KEY_F5:
+			_toggle_cpu_hold()
+			get_viewport().set_input_as_handled()
 
 func _process(delta: float) -> void:
 	if player.global_position.y < -5.0:
@@ -229,6 +235,8 @@ func _process(delta: float) -> void:
 		player.reset_body(PLAYER_SPAWN, Vector3.FORWARD)
 	if cpu.global_position.y < -5.0:
 		cpu.reset_body(CPU_SPAWN, Vector3.BACK)
+
+	_update_contact_reset(delta)
 
 	var focus := player.global_position
 	var desired := focus + _cam_offset
@@ -245,10 +253,58 @@ func _process(delta: float) -> void:
 func _reset_positions() -> void:
 	player.reset_body(PLAYER_SPAWN, Vector3.FORWARD)
 	cpu.reset_body(CPU_SPAWN, Vector3.BACK)
+	_contact_time = 0.0
 	_last_hit_age = 99.0
 	_last_hit = {}
 	if collision_manager != null:
 		collision_manager.reset()
+	# Give the player a beat to set up after a reset. Without this the CPU
+	# immediately re-acquires and the reset is useless for testing.
+	if cpu_controller != null:
+		cpu_controller.release_hold()
+		cpu_controller.hold_for(3.0)
+
+## F5: reset the CPU to its spawn and hold it indefinitely. Press F5 again to
+## release it. This keeps the human player where they are.
+func _toggle_cpu_hold() -> void:
+	if cpu_controller == null:
+		return
+	if cpu_controller.is_held():
+		cpu_controller.release_hold()
+	else:
+		_reset_cpu_only()
+		cpu_controller.toggle_hold()
+
+func _reset_cpu_only() -> void:
+	if cpu == null:
+		return
+	cpu.reset_body(CPU_SPAWN, Vector3.BACK)
+	_contact_time = 0.0
+	_last_hit_age = 99.0
+	_last_hit = {}
+	if collision_manager != null:
+		collision_manager.reset()
+
+## Safety net for testing: if a hit turns into a sustained lean for a few
+## seconds, reset the CPU and hold it briefly. If the players separate first,
+## the timer clears and the CPU keeps playing normally.
+func _update_contact_reset(delta: float) -> void:
+	if cpu == null or cpu_controller == null:
+		return
+	if cpu_controller.is_held() or _last_hit_age > 6.0:
+		_contact_time = 0.0
+		return
+	var flat := Vector3(
+		player.global_position.x - cpu.global_position.x,
+		0.0,
+		player.global_position.z - cpu.global_position.z).length()
+	if flat > CONTACT_RESET_DISTANCE:
+		_contact_time = 0.0
+		return
+	_contact_time += delta
+	if _contact_time >= AUTO_RESET_CONTACT_TIME:
+		_reset_cpu_only()
+		cpu_controller.hold_for(2.0)
 
 func _update_state_visual() -> void:
 	_apply_state_color(player, _mat, HUMAN_BASE)
@@ -340,7 +396,14 @@ func _update_readout() -> void:
 	var mode_line := "cpu mode: —"
 	if cpu != null and cpu_controller != null:
 		var cm := cpu.measurables
-		mode_line = "cpu mode: %-6s   (F2: chase / brace / strafe)" % cpu_controller.mode_name()
+		if cpu_controller.is_held():
+			var hold_left := cpu_controller.hold_remaining()
+			if hold_left > 0.0:
+				mode_line = "cpu mode: HOLD %.1fs   (F5: release)" % hold_left
+			else:
+				mode_line = "cpu mode: HOLD   (F5: release)"
+		else:
+			mode_line = "cpu mode: %-6s   (F2: mode   F5: hold)" % cpu_controller.mode_name()
 		cpu_line = "cpu: wt %.0fkg   speed %.1f mph   state %-9s   footing %.2f" % [
 			cm.mass_kg, cpu.speed_mph(), cpu.state_name(), cpu.footing_factor()]
 
@@ -385,9 +448,10 @@ func _update_readout() -> void:
 		mode_line,
 		cpu_line,
 		hit_line,
-		"collisions: %d   F3: reset both players   spot: %d-yard line   grid (F1): %s" % [
+		"collisions: %d   spot: %d-yard line   grid (F1): %s" % [
 			collisions, FieldMarkings.yard_line_at(player.global_position.z),
 			"on" if markings.is_grid_visible() else "off"],
+		"F3: reset both (3s hold)   F5: hold/release CPU   F2: CPU mode   F4: surface",
 		_device_line(),
 		"",
 		"try: let the CPU brace, then run straight through it. A planted 108 kg body costs you.",

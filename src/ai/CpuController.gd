@@ -14,13 +14,20 @@ const MODE_NAMES := ["CHASE", "BRACE", "STRAFE"]
 @export var target: PlayerEntity
 @export_enum("CHASE", "BRACE", "STRAFE") var mode: int = Mode.CHASE
 
+## Test-sandbox pause. `hold` is an indefinite hold; `hold_timer` is a timed
+## hold used by the reset button and by the auto-disengage after contact.
+var hold: bool = false
+var hold_timer: float = 0.0
+
 var _strafe_sign: float = 1.0
 
 func _ready() -> void:
 	# Intent must be written before the player's own _physics_process runs.
 	process_physics_priority = -10
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
+	if hold_timer > 0.0:
+		hold_timer = maxf(hold_timer - delta, 0.0)
 	if player == null or target == null:
 		return
 
@@ -32,6 +39,11 @@ func _physics_process(_delta: float) -> void:
 	# A defender keeps his shoulders square to the man. The player's turn rate
 	# still limits how fast that happens, so a sharp cut can catch him.
 	player.face_intent = direction
+
+	if is_held():
+		player.move_intent = Vector3.ZERO
+		player.sprint_intent = false
+		return
 
 	match mode:
 		Mode.CHASE:
@@ -53,5 +65,26 @@ func _physics_process(_delta: float) -> void:
 func cycle_mode() -> void:
 	mode = (mode + 1) % MODE_NAMES.size()
 
+## Hold the CPU in place for a few seconds. Used after F3 so the player has
+## time to set up the next test instead of being chased immediately.
+func hold_for(seconds: float) -> void:
+	hold = false
+	hold_timer = maxf(seconds, 0.0)
+
+## Toggle an indefinite hold. The sandbox calls this from F5.
+func toggle_hold() -> void:
+	hold = not hold
+	hold_timer = 0.0
+
+func release_hold() -> void:
+	hold = false
+	hold_timer = 0.0
+
+func is_held() -> bool:
+	return hold or hold_timer > 0.0
+
+func hold_remaining() -> float:
+	return hold_timer
+
 func mode_name() -> String:
-	return MODE_NAMES[mode]
+	return "HOLD" if is_held() else MODE_NAMES[mode]
