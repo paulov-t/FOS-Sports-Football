@@ -1,4 +1,4 @@
-﻿class_name PlayerEntity
+class_name PlayerEntity
 extends CharacterBody3D
 ## A single football player.
 ##

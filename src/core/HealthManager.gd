@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## Health, fatigue, and injury bookkeeping. Autoloaded as `HealthManager`.
 ##
 ## The numbers here are continuous and physical. Output scales with what the

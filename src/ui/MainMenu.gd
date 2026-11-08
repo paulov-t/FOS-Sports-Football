@@ -1,4 +1,4 @@
-﻿extends Control
+extends Control
 
 const FIELD_SCENE := "res://src/core/GreyboxField.tscn"
 

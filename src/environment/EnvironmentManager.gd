@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## Weather, field surface, and atmosphere. Autoloaded as `EnvironmentManager`.
 ## Everything here feeds real physics values: traction, grip, drag, ball flight.
 
