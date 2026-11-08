@@ -52,7 +52,7 @@ tunable from the inspector.
 
 ## Requirements
 
-- [Godot 4.4+](https://godotengine.org/download) (standard build, no C# needed)
+- [Godot 4.7+](https://godotengine.org/download) (standard build, no C# needed)
 - Any OS. Tested target: Windows, Linux, macOS, Steam Deck.
 
 ## Running
