@@ -542,9 +542,13 @@ func _handle_dive_input() -> void:
 	if not is_user_controlled:
 		return
 	if Input.is_action_just_pressed("dive"):
+		var sprinting := Input.is_action_pressed("sprint")
 		var base := Vector3(velocity.x, 0.0, velocity.z)
 		var going := base.length() >= SLIDE_MIN_SPEED
-		if going:
+		if sprinting and going:
+			print("-> DIVE (head-first)")
+			perform_dive()
+		elif going:
 			print("-> SLIDE (give-up)")
 			perform_slide()
 		else:
