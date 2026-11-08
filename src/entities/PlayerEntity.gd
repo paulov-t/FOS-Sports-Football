@@ -23,6 +23,7 @@ signal juke_performed(direction: int)
 signal hurdled(clearance_m: float)
 signal landed(impact_mps: float, speed_lost: float)
 signal dove(distance_m: float)
+signal collision_hit(impact_mps: float, source: PlayerEntity)
 
 const CUT_ANGLE_DEG := 32.0
 const PLANT_TIME := 0.17
@@ -97,6 +98,18 @@ const SLIDE_AIR_PITCH_RATE := 11.0
 const SLIDE_MIN_SPEED := 2.0
 const SLIDE_MIN_LAUNCH := 3.2
 
+## Contact reaction. A collision is not a tackle animation; it is a velocity
+## change plus a short loss of steering while the feet recover.
+const STAGGER_STEER_LOCK := 0.20
+const STAGGER_MIN_IMPACT := 0.8
+const STAGGER_PER_MPS := 0.10
+const STAGGER_MAX_TIME := 0.55
+
+## How much of the turf's grip a braced body can use when a collision arrives.
+## At full traction this is 1.0; on ice it is ~0.67, so the same hit moves you.
+const GRIP_BASE := 0.40
+const GRIP_PER_TRACTION := 0.60
+
 @export var measurables: PlayerMeasurables
 @export var player_id: String = ""
 @export var is_user_controlled: bool = false
@@ -121,6 +134,16 @@ var last_air_time: float = 0.0
 var last_landing_impact: float = 0.0
 var last_cut_angle: float = 0.0
 var cuts_this_play: int = 0
+
+## Intent set by a controller (CpuController). Ignored while is_user_controlled.
+var move_intent: Vector3 = Vector3.ZERO
+var sprint_intent: bool = false
+var face_intent: Vector3 = Vector3.ZERO
+
+## Collision reaction, written by PlayerCollisionManager.
+var stagger_timer: float = 0.0
+var stagger_dir: Vector3 = Vector3.ZERO
+var last_impact_speed: float = 0.0
 
 ## Dive phases. The body is on the ground for all of them; only AIR has it off.
 enum DivePhase { NONE, AIR, SLIDE, GETUP }
@@ -183,13 +206,15 @@ func _physics_process(delta: float) -> void:
 	var health := HealthManager.get_state(player_id) as HealthState
 	var traction := EnvironmentManager.traction
 	var max_speed: float = measurables.top_speed_mps * health.top_speed_modifier()
-	if is_user_controlled and Input.is_action_pressed("sprint"):
+	if (is_user_controlled and Input.is_action_pressed("sprint")) or sprint_intent:
 		max_speed *= sprint_mult
 
 	# The juke burst is momentum the feet did not have to earn this frame, so it
 	# rides on top of the force budget instead of being clamped by it. Invariant:
 	# velocity.xz == self-powered velocity + _juke_vel, at all times.
-	var wish := _read_input() if is_user_controlled else Vector3.ZERO
+	var wish := _read_input() if is_user_controlled else move_intent.limit_length(1.0)
+	if stagger_timer > 0.0:
+		wish *= STAGGER_STEER_LOCK
 	if _juke_timer > 0.0:
 		wish *= JUKE_STEER_LOCK
 	if _landing_timer > 0.0:
@@ -246,9 +271,10 @@ func _physics_process(delta: float) -> void:
 	# to read.
 	var travel := Vector3(velocity.x, 0.0, velocity.z)
 	var steer := _self_velocity()
-	if steer.length() > 0.15:
+	var desired_facing := face_intent if face_intent.length_squared() > 0.0001 else steer
+	if desired_facing.length() > 0.15:
 		var turn := deg_to_rad(measurables.turn_rate_deg * (0.6 if is_spinning else 1.0))
-		facing = facing.slerp(steer.normalized(), clampf(turn * delta, 0.0, 1.0))
+		facing = facing.slerp(desired_facing.normalized(), clampf(turn * delta, 0.0, 1.0))
 
 	_update_lean(travel, max_speed, delta)
 
@@ -361,6 +387,8 @@ func _begin_cut(angle: float, agility: float, traction: float) -> void:
 	cut_performed.emit(angle, speed - Vector3(velocity.x, 0.0, velocity.z).length())
 
 func _handle_spin_input(delta: float, current: Vector3, wish: Vector3) -> void:
+	if not is_user_controlled:
+		return
 	if _spin_cooldown > 0.0 or is_spinning or not is_on_floor():
 		return
 	if dive_phase != DivePhase.NONE:
@@ -391,6 +419,10 @@ func _scale_drive(f: float) -> void:
 	_juke_vel *= f
 
 func _tick_timers(delta: float) -> void:
+	if stagger_timer > 0.0:
+		stagger_timer = maxf(stagger_timer - delta, 0.0)
+		if stagger_timer <= 0.0:
+			stagger_dir = Vector3.ZERO
 	if _plant_cooldown > 0.0:
 		_plant_cooldown -= delta
 	if _plant_timer > 0.0:
@@ -760,3 +792,148 @@ func _input_forward() -> Vector3:
 ## Speed readout in mph, used by the debug HUD.
 func speed_mph() -> float:
 	return Vector3(velocity.x, 0.0, velocity.z).length() * 2.23694
+
+## --- Player-vs-player contact -------------------------------------------
+## These values are read by PlayerCollisionManager. They describe what the body
+## can actually do at the moment of contact, never a hidden tackle roll.
+
+## How much of the body's mass the turf can help resist with. A planted foot is
+## worth more than a running one; a diving or airborne body has no brace.
+func footing_factor() -> float:
+	if dive_phase == DivePhase.AIR:
+		return 0.20
+	if dive_phase != DivePhase.NONE:
+		return 0.40
+	if not is_on_floor():
+		return 0.30
+	if is_landing:
+		return 0.60
+	if is_planting:
+		return 1.30
+	if is_spinning:
+		return 0.70
+	var planar := Vector3(velocity.x, 0.0, velocity.z).length()
+	if planar < 0.5:
+		return 1.20
+	return 1.0
+
+## The mass the ground lets a body bring to a collision. Mass alone is inertia;
+## strength and a braced stance are what turn it into resistance. Traction is
+## applied here, not in the movement code, so a slick surface costs you the
+## ground reaction you were counting on.
+func effective_collision_mass(toward_opponent: Vector3) -> float:
+	var m := maxf(measurables.mass_kg, 1.0)
+	var condition := HealthManager.get_state(player_id).performance_modifier()
+	var strength := clampf(measurables.break_tackle_force, 0.75, 2.2)
+	var facing_dot := facing.dot(toward_opponent)
+	var brace := 0.85 + 0.35 * maxf(0.0, facing_dot)
+	var grip := clampf(GRIP_BASE + GRIP_PER_TRACTION * EnvironmentManager.traction, 0.35, 1.0)
+	return m * footing_factor() * strength * brace * (0.85 + 0.15 * condition) * grip
+
+## World-space centre of the body used for contact tests. A diving body lies
+## forward and low, so its contact point is not the node origin.
+func collision_center() -> Vector3:
+	var p := global_position
+	if dive_phase != DivePhase.NONE:
+		p += facing * 0.42
+		p.y -= _dive_drop
+	return p
+
+func collision_radius() -> float:
+	if dive_phase != DivePhase.NONE:
+		return 0.50
+	if _stand_shape is CapsuleShape3D:
+		return (_stand_shape as CapsuleShape3D).radius
+	return 0.32
+
+func collision_bottom() -> float:
+	if dive_phase != DivePhase.NONE:
+		var r := _dive_shape.radius if _dive_shape != null else 0.32
+		return global_position.y - _dive_drop - r
+	return global_position.y - _stand_half
+
+func collision_top() -> float:
+	if dive_phase != DivePhase.NONE:
+		var r := _dive_shape.radius if _dive_shape != null else 0.32
+		return global_position.y - _dive_drop + r
+	return global_position.y + _stand_half
+
+## Turn an impulse into a body reaction. The manager owns the math; this only
+## applies the velocity change and the short loss of steering that follows.
+func apply_impact(delta_v: Vector3, source: PlayerEntity) -> void:
+	if delta_v.length_squared() < 0.0001:
+		return
+	velocity += delta_v
+	var impact := delta_v.length()
+	last_impact_speed = impact
+	if impact >= STAGGER_MIN_IMPACT:
+		stagger_timer = maxf(stagger_timer,
+			clampf(impact * STAGGER_PER_MPS, 0.12, STAGGER_MAX_TIME))
+		stagger_dir = delta_v.normalized()
+		collision_hit.emit(impact, source)
+
+## Put the body back on its feet at a known spot. Used by the sandbox reset and
+## by the fall-off-world guard.
+func reset_body(pos: Vector3, face: Vector3) -> void:
+	global_position = pos
+	velocity = Vector3.ZERO
+	facing = face.normalized() if face.length_squared() > 0.0001 else Vector3.FORWARD
+	move_intent = Vector3.ZERO
+	sprint_intent = false
+	face_intent = Vector3.ZERO
+	stagger_timer = 0.0
+	stagger_dir = Vector3.ZERO
+	last_impact_speed = 0.0
+	is_spinning = false
+	is_planting = false
+	is_juking = false
+	is_airborne = false
+	is_landing = false
+	lean = 0.0
+	air_pitch = 0.0
+	last_jump_clearance = 0.0
+	last_air_time = 0.0
+	last_landing_impact = 0.0
+	last_cut_angle = 0.0
+	_spin_timer = 0.0
+	_spin_cooldown = 0.0
+	_plant_timer = 0.0
+	_plant_cooldown = 0.0
+	_juke_vel = Vector3.ZERO
+	_juke_timer = 0.0
+	_juke_cooldown = 0.0
+	_landing_timer = 0.0
+	_hurdle_cooldown = 0.0
+	_air_time = 0.0
+	_dive_pitch = 0.0
+	_dive_ground_blend = 0.0
+	_dive_timer = 0.0
+	_dive_air_timer = 0.0
+	_dive_cooldown = 0.0
+	dive_phase = DivePhase.NONE
+	dive_type = DiveType.NONE
+	dive_distance = 0.0
+	_dive_start_pos = pos
+	_set_dive_shape(false)
+	if _visual != null:
+		_visual.position = Vector3.ZERO
+		_visual.rotation = Vector3.ZERO
+		_visual.scale = Vector3.ONE
+
+## Human-readable state for the debug HUD. Shared by every body in the sandbox.
+func state_name() -> String:
+	if dive_phase != DivePhase.NONE:
+		return ["", "DIVING", "SLIDING", "GET UP"][dive_phase]
+	if stagger_timer > 0.0:
+		return "STAGGERED"
+	if is_airborne:
+		return "AIRBORNE"
+	if is_landing:
+		return "LANDING"
+	if is_spinning:
+		return "SPINNING"
+	if is_juking:
+		return "JUKING"
+	if is_planting:
+		return "PLANTING"
+	return "grounded"

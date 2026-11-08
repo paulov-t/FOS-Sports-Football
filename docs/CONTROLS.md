@@ -147,9 +147,26 @@ see what the physics is doing; none of it is a game system:
 | Shoulder bar | Turns with the body, so torso alignment is readable from any angle |
 | Spot readout | HUD line showing the nearest painted yard line |
 | F1 | Toggles a 1-yard reference grid over the field |
+| F2 | Cycles the CPU defender through CHASE, BRACE and STRAFE |
+| F3 | Resets both players to their spawn spots and clears the collision counter |
+| F4 | Cycles the surface (natural grass, turf, wet, mud, snow, ice) |
 
 The field's long axis runs into the screen, so yard lines recede toward the horizon. That
 is deliberate: it is the strongest cue for judging speed and distance travelled.
+
+### Player-vs-player contact
+
+The sandbox spawns a 108 kg MLB against the 88 kg receiver. Both are real `CharacterBody3D`
+players; body-to-body contact is resolved after they move, not by `move_and_slide()`.
+
+The HUD reports the closing speed, impulse, each player's velocity change and the effective
+masses used for the exchange. Effective mass is not just weight: it includes footing
+(braced, running, landing, airborne, diving), `break_tackle_force`, the angle between the
+body's facing and the contact normal, current condition, and the surface's traction.
+
+A strong hit briefly locks steering. That stagger is the readable consequence of the
+impulse, not a separate tackle animation. The `F4` surfaces exist so you can see the same
+hit behave differently when the turf cannot supply the same grip.
 
 ## Keyboard and mouse
 

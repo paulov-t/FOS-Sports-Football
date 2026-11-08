@@ -63,3 +63,19 @@ func recalculate() -> void:
 func wear_surface(amount: float) -> void:
 	surface_wear = clampf(surface_wear + amount, 0.0, 1.0)
 	recalculate()
+
+## Debug helper for the sandbox: step through the surfaces in order. This does
+## not change precipitation or wear, so each surface's base traction stays a
+## clean variable while we tune collisions.
+func cycle_surface() -> void:
+	match surface:
+		Surface.NATURAL_GRASS: surface = Surface.TURF
+		Surface.TURF: surface = Surface.WET
+		Surface.WET: surface = Surface.MUD
+		Surface.MUD: surface = Surface.SNOW
+		Surface.SNOW: surface = Surface.ICE
+		_: surface = Surface.NATURAL_GRASS
+	recalculate()
+
+func surface_name() -> String:
+	return Surface.keys()[surface]

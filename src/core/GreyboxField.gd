@@ -1,8 +1,14 @@
 extends Node3D
-## Greybox sandbox: flat field, one player, chase cam.
-## Purpose is to validate movement feel — weight, accel, cut severity, spin cost.
+## Greybox sandbox: flat field, a human player, a CPU body, chase cam.
+## Purpose is to validate movement feel and player-vs-player contact physics.
 
 const HINT_CONTROLLER := "No controller detected. Plug one in — Xbox, PlayStation, and generic XInput pads all work."
+const PLAYER_SPAWN := Vector3(0.0, 0.93, 36.576)
+const CPU_SPAWN := Vector3(0.0, 0.93, 28.0)
+const HUMAN_BASE := Color(0.85, 0.87, 0.92)
+const CPU_BASE := Color(0.80, 0.25, 0.25)
+const HUMAN_CHEVRON := Color(1.0, 0.62, 0.15)
+const CPU_CHEVRON := Color(0.95, 0.25, 0.25)
 
 @onready var player: PlayerEntity = $Player
 @onready var camera: Camera3D = $Camera3D
@@ -11,23 +17,47 @@ const HINT_CONTROLLER := "No controller detected. Plug one in — Xbox, PlayStat
 @onready var mesh: MeshInstance3D = $Player/Visual/MeshInstance3D
 @onready var markings: FieldMarkings = $FieldMarkings
 
+var cpu: PlayerEntity
+var cpu_controller: CpuController
+var collision_manager: PlayerCollisionManager
+
 var _cam_offset := Vector3(0.0, 5.5, 9.0)
 var _mat: StandardMaterial3D
+var _cpu_mat: StandardMaterial3D
+var _cpu_mesh: MeshInstance3D
 var _last_cut := 0.0
 var _last_cut_loss := 0.0
 var _last_cut_age := 99.0
 var _last_juke_age := 99.0
 var _last_jump_age := 99.0
 var _last_dive_age := 99.0
+var _last_hit_age := 99.0
+var _last_hit: Dictionary = {}
 
 func _ready() -> void:
 	player.is_user_controlled = true
 	player.measurables.compute()
+	# Players collide with the world (layer 1) but not with each other (layer 2).
+	# PlayerCollisionManager owns body-to-body contact so momentum can transfer.
+	player.collision_layer = 2
+	player.collision_mask = 1
+	player.add_to_group("players")
+
+	_spawn_cpu()
 	_fit_ground()
-	_build_player_markers()
-	_mat = StandardMaterial3D.new()
-	_mat.albedo_color = Color(0.85, 0.87, 0.92)
+	_build_player_markers(player, HUMAN_CHEVRON, Color(0.13, 0.17, 0.28))
+	_build_player_markers(cpu, CPU_CHEVRON, Color(0.28, 0.10, 0.10))
+
+	_mat = _make_material(HUMAN_BASE)
 	mesh.material_override = _mat
+	_cpu_mesh = cpu.get_node_or_null("Visual/MeshInstance3D") as MeshInstance3D
+	_cpu_mat = _make_material(CPU_BASE)
+	if _cpu_mesh != null:
+		_cpu_mesh.material_override = _cpu_mat
+
+	_setup_cpu_controller()
+	_setup_collision_manager()
+
 	player.cut_performed.connect(_on_cut)
 	player.spin_started.connect(_on_spin)
 	player.juke_performed.connect(_on_juke)
@@ -35,6 +65,57 @@ func _ready() -> void:
 	player.dove.connect(_on_dove)
 	InputManager.device_changed.connect(func(_g, _c): _refresh_hint())
 	_refresh_hint()
+
+func _spawn_cpu() -> void:
+	# The CPU is a real PlayerEntity, not a special case. Duplicating the node
+	# keeps its movement, dive and visual code identical to the human's.
+	cpu = player.duplicate() as PlayerEntity
+	cpu.name = "CpuPlayer"
+	cpu.player_id = "cpu"
+	cpu.is_user_controlled = false
+	cpu.measurables = _make_cpu_measurables()
+	cpu.position = CPU_SPAWN
+	cpu.collision_layer = 2
+	cpu.collision_mask = 1
+	add_child(cpu)
+	cpu.add_to_group("players")
+	cpu.reset_body(CPU_SPAWN, Vector3.BACK)
+
+func _make_cpu_measurables() -> PlayerMeasurables:
+	# A heavier, stronger, slightly slower body than the human WR. The point is
+	# to make mass and strength differences obvious while tuning collisions.
+	var m := PlayerMeasurables.new()
+	m.position = PlayerPosition.PlayerPosition.MLB
+	m.height_cm = 188.0
+	m.weight_kg = 108.0
+	m.wingspan_cm = 196.0
+	m.arm_length_cm = 88.0
+	m.hand_size_cm = 24.0
+	m.forty_yard_s = 4.65
+	m.ten_yard_split_s = 1.60
+	m.twenty_yard_shuttle_s = 4.30
+	m.three_cone_s = 7.10
+	m.short_shuttle_s = 4.30
+	m.vertical_jump_cm = 80.0
+	m.broad_jump_cm = 290.0
+	m.bench_press_reps = 25
+	m.compute()
+	return m
+
+func _setup_cpu_controller() -> void:
+	cpu_controller = CpuController.new()
+	cpu_controller.name = "CpuController"
+	cpu_controller.player = cpu
+	cpu_controller.target = player
+	add_child(cpu_controller)
+
+func _setup_collision_manager() -> void:
+	collision_manager = PlayerCollisionManager.new()
+	collision_manager.name = "PlayerCollisionManager"
+	collision_manager.register(player)
+	collision_manager.register(cpu)
+	add_child(collision_manager)
+	collision_manager.impact_resolved.connect(_on_impact_resolved)
 
 ## Keep the visible turf, the collision slab and the painted lines in sync.
 ## FieldMarkings owns the dimensions so there is one source of truth.
@@ -48,11 +129,9 @@ func _fit_ground() -> void:
 
 ## The capsule is symmetric, so orientation is invisible without help. Two cues:
 ## a bright bar across the shoulders that turns with the body, and a chevron
-## floating above the head pointing at the front. The chevron is above the head
-## rather than on the ground because the chase cam looks down at a shallow angle
-## and the player's own body hides the ground at their feet.
-func _build_player_markers() -> void:
-	var visual := player.get_node_or_null("Visual") as Node3D
+## floating above the head pointing at the front.
+func _build_player_markers(p: PlayerEntity, chevron_color: Color, bar_color: Color) -> void:
+	var visual := p.get_node_or_null("Visual") as Node3D
 	if visual == null:
 		return
 
@@ -63,7 +142,7 @@ func _build_player_markers() -> void:
 	bar.mesh = box
 	bar.position = Vector3(0.0, 0.42, 0.0)
 	var bar_mat := StandardMaterial3D.new()
-	bar_mat.albedo_color = Color(0.13, 0.17, 0.28)
+	bar_mat.albedo_color = bar_color
 	bar_mat.roughness = 0.75
 	bar.material_override = bar_mat
 	visual.add_child(bar)
@@ -94,10 +173,15 @@ func _build_player_markers() -> void:
 	arrow.mesh = _make_chevron_mesh()
 	var arrow_mat := StandardMaterial3D.new()
 	arrow_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	arrow_mat.albedo_color = Color(1.0, 0.62, 0.15)
+	arrow_mat.albedo_color = chevron_color
 	arrow_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	arrow.material_override = arrow_mat
 	marker.add_child(arrow)
+
+func _make_material(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	return mat
 
 ## Chevron pointing along -Z, which is the node's forward direction.
 func _make_chevron_mesh() -> ArrayMesh:
@@ -122,15 +206,29 @@ func _make_chevron_mesh() -> ArrayMesh:
 
 func _unhandled_input(event: InputEvent) -> void:
 	var key := event as InputEventKey
-	if key != null and key.pressed and not key.echo and key.keycode == KEY_F1:
-		markings.toggle_grid()
-		get_viewport().set_input_as_handled()
+	if key == null or not key.pressed or key.echo:
+		return
+	match key.keycode:
+		KEY_F1:
+			markings.toggle_grid()
+			get_viewport().set_input_as_handled()
+		KEY_F2:
+			if cpu_controller != null:
+				cpu_controller.cycle_mode()
+			get_viewport().set_input_as_handled()
+		KEY_F3:
+			_reset_positions()
+			get_viewport().set_input_as_handled()
+		KEY_F4:
+			EnvironmentManager.cycle_surface()
+			get_viewport().set_input_as_handled()
 
 func _process(delta: float) -> void:
 	if player.global_position.y < -5.0:
 		# Fell off the world: put them back on the field instead of falling forever.
-		player.global_position = Vector3(0.0, 1.2, 36.576)
-		player.velocity = Vector3.ZERO
+		player.reset_body(PLAYER_SPAWN, Vector3.FORWARD)
+	if cpu.global_position.y < -5.0:
+		cpu.reset_body(CPU_SPAWN, Vector3.BACK)
 
 	var focus := player.global_position
 	var desired := focus + _cam_offset
@@ -140,27 +238,44 @@ func _process(delta: float) -> void:
 	_last_juke_age += delta
 	_last_jump_age += delta
 	_last_dive_age += delta
+	_last_hit_age += delta
 	_update_state_visual()
 	_update_readout()
 
+func _reset_positions() -> void:
+	player.reset_body(PLAYER_SPAWN, Vector3.FORWARD)
+	cpu.reset_body(CPU_SPAWN, Vector3.BACK)
+	_last_hit_age = 99.0
+	_last_hit = {}
+	if collision_manager != null:
+		collision_manager.reset()
+
 func _update_state_visual() -> void:
-	if player.dive_phase != PlayerEntity.DivePhase.NONE:
-		_mat.albedo_color = Color(0.98, 0.45, 0.32)
-	elif player.is_airborne:
-		_mat.albedo_color = Color(0.72, 0.80, 1.00)
-	elif player.is_landing:
-		_mat.albedo_color = Color(0.95, 0.62, 0.30)
-	elif player.is_spinning:
-		_mat.albedo_color = Color(0.30, 0.80, 0.95)
-	elif player.is_juking:
-		_mat.albedo_color = Color(0.55, 0.95, 0.55)
-	elif player.is_planting:
-		_mat.albedo_color = Color(0.98, 0.82, 0.25)
+	_apply_state_color(player, _mat, HUMAN_BASE)
+	if cpu != null and _cpu_mat != null:
+		_apply_state_color(cpu, _cpu_mat, CPU_BASE)
+
+func _apply_state_color(p: PlayerEntity, mat: StandardMaterial3D, base: Color) -> void:
+	if p.dive_phase != PlayerEntity.DivePhase.NONE:
+		mat.albedo_color = Color(0.98, 0.45, 0.32)
+	elif p.is_airborne:
+		mat.albedo_color = Color(0.72, 0.80, 1.00)
+	elif p.stagger_timer > 0.0:
+		mat.albedo_color = Color(1.0, 0.32, 0.32)
+	elif p.is_landing:
+		mat.albedo_color = Color(0.95, 0.62, 0.30)
+	elif p.is_spinning:
+		mat.albedo_color = Color(0.30, 0.80, 0.95)
+	elif p.is_juking:
+		mat.albedo_color = Color(0.55, 0.95, 0.55)
+	elif p.is_planting:
+		mat.albedo_color = Color(0.98, 0.82, 0.25)
 	else:
-		_mat.albedo_color = Color(0.85, 0.87, 0.92)
+		mat.albedo_color = base
 
 func _on_cut(angle_deg: float, speed_lost: float) -> void:
 	_last_cut = angle_deg
+	_last_cut_loss = speed_lost
 	_last_cut_age = 0.0
 
 func _on_spin(_direction: int) -> void:
@@ -174,6 +289,10 @@ func _on_hurdled(_clearance: float) -> void:
 
 func _on_dove(_distance: float) -> void:
 	_last_dive_age = 0.0
+
+func _on_impact_resolved(info: Dictionary) -> void:
+	_last_hit = info
+	_last_hit_age = 0.0
 
 func _refresh_hint() -> void:
 	hint.visible = not InputManager.has_gamepad()
@@ -196,21 +315,9 @@ func _update_readout() -> void:
 
 	var cut_line := "cut: —"
 	if _last_cut_age < 1.2:
-		cut_line = "cut: %.0f°   speed lost: %.1f mph" % [_last_cut, 0.0]
+		cut_line = "cut: %.0f°   speed lost: %.1f mph" % [_last_cut, _last_cut_loss * 2.23694]
 
-	var state := "grounded"
-	if player.dive_phase != PlayerEntity.DivePhase.NONE:
-		state = ["", "DIVING", "SLIDING", "GET UP"][player.dive_phase]
-	elif player.is_airborne:
-		state = "AIRBORNE"
-	elif player.is_landing:
-		state = "LANDING"
-	elif player.is_spinning:
-		state = "SPINNING"
-	elif player.is_juking:
-		state = "JUKING"
-	elif player.is_planting:
-		state = "PLANTING"
+	var state := player.state_name()
 
 	var juke_line := "—"
 	if _last_juke_age < 1.0:
@@ -229,6 +336,31 @@ func _update_readout() -> void:
 		dive_line = "dive: %.2f m covered   (%.1f yd)" % [
 			player.last_dive_distance, player.last_dive_distance * 1.09361]
 
+	var cpu_line := "cpu: —"
+	var mode_line := "cpu mode: —"
+	if cpu != null and cpu_controller != null:
+		var cm := cpu.measurables
+		mode_line = "cpu mode: %-6s   (F2: chase / brace / strafe)" % cpu_controller.mode_name()
+		cpu_line = "cpu: wt %.0fkg   speed %.1f mph   state %-9s   footing %.2f" % [
+			cm.mass_kg, cpu.speed_mph(), cpu.state_name(), cpu.footing_factor()]
+
+	var hit_line := "collision: —"
+	if _last_hit_age < 2.5 and not _last_hit.is_empty():
+		var a_is_you := String(_last_hit.get("a_id", "")) == player.player_id
+		var dv_you := float(_last_hit.get("dv_a" if a_is_you else "dv_b", 0.0))
+		var dv_cpu := float(_last_hit.get("dv_b" if a_is_you else "dv_a", 0.0))
+		var m_you := float(_last_hit.get("m_eff_a" if a_is_you else "m_eff_b", 0.0))
+		var m_cpu := float(_last_hit.get("m_eff_b" if a_is_you else "m_eff_a", 0.0))
+		hit_line = "collision: closing %.1f m/s   impulse %.0f N·s   Δv you %.1f / cpu %.1f" % [
+			float(_last_hit.get("closing", 0.0)),
+			float(_last_hit.get("impulse", 0.0)),
+			dv_you,
+			dv_cpu,
+		]
+		hit_line += "   (effective mass %.0f / %.0f kg)" % [m_you, m_cpu]
+
+	var collisions := collision_manager.impact_count if collision_manager != null else 0
+
 	readout.text = "\n".join([
 		"FOS Sports Football — greybox",
 		"move %s    sprint %s    spin %s    juke %s    hurdle %s    dive %s" % [
@@ -244,18 +376,21 @@ func _update_readout() -> void:
 		"wt: %.0fkg  top speed: %.2f m/s (%.1f mph)" % [m.mass_kg, m.top_speed_mps, m.top_speed_mps * 2.23694],
 		"accel: %.2f m/s²   turn: %.0f°/s   reach: %.2fm" % [m.accel_mps2, m.turn_rate_deg, m.reach_m],
 		"",
-		"speed: %.1f mph   stamina: %.0f%%   traction: %.2f" % [player.speed_mph(), h.stamina * 100.0, EnvironmentManager.traction],
+		"speed: %.1f mph   stamina: %.0f%%   traction: %.2f   surface: %s (F4)" % [
+			player.speed_mph(), h.stamina * 100.0, EnvironmentManager.traction, EnvironmentManager.surface_name()],
 		"state: %-9s %s   cuts: %d   juke: %s" % [state, cut_line, player.cuts_this_play, juke_line],
 		jump_line,
 		dive_line,
-		"spot: %d-yard line   yard grid (F1): %s" % [
-			FieldMarkings.yard_line_at(player.global_position.z),
-			"on" if markings.is_grid_visible() else "off",
-		],
+		"",
+		mode_line,
+		cpu_line,
+		hit_line,
+		"collisions: %d   F3: reset both players   spot: %d-yard line   grid (F1): %s" % [
+			collisions, FieldMarkings.yard_line_at(player.global_position.z),
+			"on" if markings.is_grid_visible() else "off"],
 		_device_line(),
 		"",
-		"try: sprint straight, then slam a hard left at full speed.",
-		"try: sprint, then flick the right stick — you slide sideways but keep your drive.",
-		"try: sprint, then spin — you keep momentum but lose your steer.",
-		"try: sprint, then jump — your line is decided the moment your feet leave the turf.",
+		"try: let the CPU brace, then run straight through it. A planted 108 kg body costs you.",
+		"try: chase the CPU and hit it from the side. Angle and facing change the result.",
+		"try: dive at the CPU. No feet planted means you trade leverage for reach.",
 	])
