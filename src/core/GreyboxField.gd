@@ -3,6 +3,7 @@ extends Node3D
 ## Purpose is to validate movement feel — weight, accel, cut severity, spin cost.
 
 const HINT_CONTROLLER := "No controller detected. Plug one in — Xbox, PlayStation, and generic XInput pads all work."
+const BALL_START_OFFSET := Vector3(0.0, -0.82, -1.0)
 
 @onready var player: PlayerEntity = $Player
 @onready var camera: Camera3D = $Camera3D
@@ -21,6 +22,15 @@ var _last_jump_age := 99.0
 var _last_dive_age := 99.0
 
 func _ready() -> void:
+	var ball := BallEntity.new()
+	ball.name = "Ball"
+	ball.position = player.position + BALL_START_OFFSET
+	add_child(ball)
+	
+	_generateCrowd()
+	
+	
+
 	player.is_user_controlled = true
 	player.measurables.compute()
 	_fit_ground()
@@ -35,6 +45,28 @@ func _ready() -> void:
 	player.dove.connect(_on_dove)
 	InputManager.device_changed.connect(func(_g, _c): _refresh_hint())
 	_refresh_hint()
+
+func _generateCrowd() -> void:
+	## NOTE: This should be an array but I dont know how arrays work in GD script
+	var crowd1 := CrowdEntity.new();
+	crowd1.position = Vector3(45, 4, 0);
+	crowd1.rotate(Vector3.UP, deg_to_rad(90));
+	add_child(crowd1)
+	
+	var crowd2 := CrowdEntity.new();
+	crowd2.position = Vector3(-45, 4, 0);
+	crowd2.rotate(Vector3.UP, deg_to_rad(-90));
+	add_child(crowd2)
+	
+	var crowd3 := CrowdEntity.new();
+	crowd3.position = Vector3(0, 4, 50);
+	add_child(crowd3)
+	
+	var crowd4 := CrowdEntity.new();
+	crowd4.position = Vector3(0, 4, -50);
+	crowd4.rotate(Vector3.UP, deg_to_rad(-180));
+	add_child(crowd4)
+
 
 ## Keep the visible turf, the collision slab and the painted lines in sync.
 ## FieldMarkings owns the dimensions so there is one source of truth.
