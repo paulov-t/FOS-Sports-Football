@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## Tracks the active input device and exposes the right button glyphs.
 ## Autoloaded as `InputManager`.
 

@@ -52,7 +52,7 @@ tunable from the inspector.
 
 ## Requirements
 
-- [Godot 4.4+](https://godotengine.org/download) (standard build, no C# needed)
+- [Godot 4.7+](https://godotengine.org/download) (standard build, no C# needed)
 - Any OS. Tested target: Windows, Linux, macOS, Steam Deck.
 
 ## Running
@@ -69,6 +69,9 @@ Or open `project.godot` in the Godot editor and press **F5**.
 
 Default bindings follow the **classic Madden scheme**. See [docs/CONTROLS.md](docs/CONTROLS.md)
 for the full table and the planned passing/defense/pre-snap layouts.
+
+For the current sandbox controls, reset/hold keys, and playtest checklist, see
+[docs/PLAYTEST.md](docs/PLAYTEST.md).
 
 | Action | Keyboard / Mouse | Xbox | PlayStation |
 | --- | --- | --- | --- |

@@ -138,7 +138,8 @@ trajectory, lead, and whether the window is actually open come from physics.
 ## Greybox sandbox
 
 `src/core/GreyboxField.tscn` is the movement test bed. Everything below exists so you can
-see what the physics is doing; none of it is a game system:
+see what the physics is doing; none of it is a game system. For the full sandbox checklist,
+see [PLAYTEST.md](PLAYTEST.md).
 
 | Aid | What it is |
 | --- | --- |
@@ -147,9 +148,32 @@ see what the physics is doing; none of it is a game system:
 | Shoulder bar | Turns with the body, so torso alignment is readable from any angle |
 | Spot readout | HUD line showing the nearest painted yard line |
 | F1 | Toggles a 1-yard reference grid over the field |
+| F2 | Cycles the CPU defender through CHASE, BRACE and STRAFE |
+| F3 | Resets both players, clears the collision counter, and holds the CPU for 3 seconds |
+| F4 | Cycles the surface (natural grass, turf, wet, mud, snow, ice) |
+| F5 | Resets the CPU and toggles an indefinite hold; press again to release it |
 
 The field's long axis runs into the screen, so yard lines recede toward the horizon. That
 is deliberate: it is the strongest cue for judging speed and distance travelled.
+
+### Player-vs-player contact
+
+The sandbox spawns a 108 kg MLB against the 88 kg receiver. Both are real `CharacterBody3D`
+players; body-to-body contact is resolved after they move, not by `move_and_slide()`.
+
+The HUD reports the closing speed, impulse, each player's velocity change and the effective
+masses used for the exchange. Effective mass is not just weight: it includes footing
+(braced, running, landing, airborne, diving), `break_tackle_force`, the angle between the
+body's facing and the contact normal, current condition, and the surface's traction.
+
+A strong hit briefly locks steering. That stagger is the readable consequence of the
+impulse, not a separate tackle animation. The `F4` surfaces exist so you can see the same
+hit behave differently when the turf cannot supply the same grip.
+
+`F5` is the test control: it puts the CPU back on its spawn and holds it there until you
+press `F5` again. `F3` resets both bodies and gives the CPU a 3-second hold before it
+resumes. If contact turns into a sustained lean, the sandbox also resets the CPU after a
+few seconds of continuous contact; separating first cancels that auto-reset.
 
 ## Keyboard and mouse
 

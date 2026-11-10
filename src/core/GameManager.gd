@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## Global game state. Autoloaded as `GameManager`.
 ## NOTE: no `class_name` here — the autoload singleton name is the handle.
 

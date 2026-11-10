@@ -1,4 +1,4 @@
-﻿extends Node
+extends Node
 ## Central tuning for the physics simulation. Autoloaded as `PhysicsManager`.
 ## Simulation vs arcade is expressed purely as parameter sets — never as
 ## scripted outcomes or probability tables.
